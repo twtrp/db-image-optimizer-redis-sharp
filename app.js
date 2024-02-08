@@ -127,81 +127,43 @@ app.get('/infotest', async (req, res) => {
    FetchQuery(res, 'SELECT id, album, value FROM images WHERE id=1 OR album=2', 'infotest', ['id', 'album', 'value'], []);
 })
 
-//Adjustable metadata logging
+//Fetch function
 
-async function CheckLogEntry(redisKey) {
-   var [check] = await QueryDatabase(`SELECT 1 FROM metadata_query WHERE redisKey='`+redisKey+`'`);
-   if (check.length != 0) {
-      console.log(`◻ Log entry already exists`);
-      return true;
+async function FetchQuery(res, query, redisKey, genericAtt, imgAtt) {
+   console.log('● API called');
+   startTime = new Date().getTime();
+   const rJson = await redis.get(redisKey);
+   console.log('○ Key:', redisKey);
+   if (rJson != null) {
+      console.log('○ Cache: Hit');
+      res.send(rJson);
+      RecordResponseTime();
+      AddTTL(redisKey);
    }
    else {
-      return false;
+      console.log('○ Cache: Miss');
+      const [dbData] = await QueryDatabase(query);
+      res.send(dbData);
+      RecordResponseTime();
+      let dbJson;
+      if (enableCompression) {
+         dbJson = await CompressImage(dbData, genericAtt, imgAtt);
+      }
+      else {
+         dbJson = JSON.stringify(dbData);
+      }
+      if (enableTTL) {
+         redis.setex(redisKey, TTLbase, dbJson);
+         console.log('▷ Set key', redisKey, 'with TTL', TTLbase, 's');
+      }
+      else {
+         redis.set(redisKey, dbJson);
+         console.log('▷ Set key', redisKey, 'with no TTL');
+      }
+      console.log('▷ Approximate size in Redis:', Math.round(dbJson.length / 1.81), 'bytes');
+      LogMetadata(redisKey, query);
    }
 }
-
-async function LogMetadata(redisKey, query) {
-   console.log('◼ Logging begins');
-   const logExists = await CheckLogEntry(redisKey);
-   if (!logExists) {
-      QueryDatabase(`INSERT INTO metadata_query (redisKey, query) VALUES ('`+redisKey+`', '`+query+`')`);
-      console.log('◻ Logged metadata_query');
-      const [rows] = await QueryDatabase(`SELECT `+primaryKeyAtt+` FROM`+query.split('FROM')[1]);
-      for (const item of rows) {
-         QueryDatabase(`INSERT INTO metadata_row (redisKey, row) VALUES ('`+redisKey+`', `+item.id+`)`);
-      }
-      console.log('◻ Logged metadata_row');
-      var rowOrder = '';
-      var count = rows.length;
-      for (const item of rows) {
-         rowOrder += item.id;
-         if (count > 1) {
-            rowOrder += ',';
-         }
-         count--;
-      }
-      QueryDatabase(`INSERT INTO metadata_roworder (redisKey, rowOrder) VALUES ('`+redisKey+`', '`+rowOrder+`')`);
-      console.log('◻ Logged metadata_roworder');
-      const columns = query.match(/SELECT\s+(.+?)\s+FROM/i)[1].split(',').map(name => name.trim());
-      for (const item of columns) {
-         QueryDatabase(`INSERT INTO metadata_column (redisKey, columnName) VALUES ('`+redisKey+`', '`+item+`')`);
-      }
-      console.log('◻ Logged metadata_column');
-      var [columnNames] = await QueryDatabase(`SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '`+mainTable+`'`);
-      columnNames = columnNames.map(columnNames => columnNames.COLUMN_NAME);
-      conditions = query.split('FROM ')[1];
-      for (const item of columns) {
-         const regex = new RegExp(`\\b${item}\\b`, 'i');
-         if (regex.test(conditions)) {
-            QueryDatabase(`INSERT INTO metadata_columnconditions (redisKey, columnName) VALUES ('`+redisKey+`', '`+item+`')`)
-         }
-      }
-      console.log('◻ Logged metadata_columnconditions');
-   }
-}
-
-//Adjustable outdated cache handler
-
-instance.addTrigger({
-   name: 'DetectChange',
-   expression: 'redisresearch.images',
-   statement: MySQLEvents.STATEMENTS.ALL,
-   onEvent: async (event) => {
-      if (event.table != 'metadata') {
-         console.log('▶ A change in DB detected');
-         console.log('▷ Table:', event.table);
-         console.log('▷ Row:', event.affectedRows[0].before['id']);
-         const affectedColumns = event.affectedColumns.filter(item => item !== 'image');
-         console.log('▷ Column:', affectedColumns);
-         console.log('▷ Value before:', event.affectedRows[0].before[affectedColumns[0]]);
-         console.log('▷ Value after:', event.affectedRows[0].after[affectedColumns[0]]);
-      }
-   }
-})
-instance.on(MySQLEvents.EVENTS.CONNECTION_ERROR, console.error);
-instance.on(MySQLEvents.EVENTS.ZONGJI_ERROR, console.error);
-
-
 
 //TTL function
 
@@ -218,6 +180,7 @@ async function AddTTL(redisKey) {
 }
 
 //Image compression
+
 async function CompressImage(dbData, genericAtt, imgAtt) {
    console.log('▶ Compression process begins');
    if (imgAtt.length == 0) {
@@ -275,43 +238,83 @@ async function CompressImage(dbData, genericAtt, imgAtt) {
    };
 }
 
-//Fetch function
+//Metadata logging
 
-async function FetchQuery(res, query, redisKey, genericAtt, imgAtt) {
-   console.log('● API called');
-   startTime = new Date().getTime();
-   const rJson = await redis.get(redisKey);
-   console.log('○ Key:', redisKey);
-   if (rJson != null) {
-      console.log('○ Cache: Hit');
-      res.send(rJson);
-      RecordResponseTime();
-      AddTTL(redisKey);
+async function CheckLogEntry(redisKey) {
+   var [check] = await QueryDatabase(`SELECT 1 FROM metadata_query WHERE redisKey='`+redisKey+`'`);
+   if (check.length != 0) {
+      return true;
    }
    else {
-      console.log('○ Cache: Miss');
-      const [dbData] = await QueryDatabase(query);
-      res.send(dbData);
-      RecordResponseTime();
-      let dbJson;
-      if (enableCompression) {
-         dbJson = await CompressImage(dbData, genericAtt, imgAtt);
-      }
-      else {
-         dbJson = JSON.stringify(dbData);
-      }
-      if (enableTTL) {
-         redis.setex(redisKey, TTLbase, dbJson);
-         console.log('▷ Set key', redisKey, 'with TTL', TTLbase, 's');
-      }
-      else {
-         redis.set(redisKey, dbJson);
-         console.log('▷ Set key', redisKey, 'with no TTL');
-      }
-      console.log('▷ Approximate size in Redis:', Math.round(dbJson.length / 1.81), 'bytes');
-      LogMetadata(redisKey, query);
+      return false;
    }
 }
+
+async function DeleteMetaData(redisKey) {
+   QueryDatabase(`DELETE FROM ${mainTable} WHERE redisKey=${redisKey}`);
+}
+
+async function LogMetadata(redisKey, query) {
+   console.log('◼ Logging begins');
+   const logExists = await CheckLogEntry(redisKey);
+   if (logExists) {
+      DeleteMetaData(redisKey);
+   }
+   QueryDatabase(`INSERT INTO metadata_query (redisKey, query) VALUES ('${redisKey}', '${query}')`);
+   console.log('◻ Logged metadata_query');
+   const [rows] = await QueryDatabase(`SELECT `+primaryKeyAtt+` FROM`+query.split('FROM')[1]);
+   for (const item of rows) {
+      QueryDatabase(`INSERT INTO metadata_row (redisKey, row) VALUES ('${redisKey}', ${item.id})`);
+   }
+   console.log('◻ Logged metadata_row');
+   var rowOrder = '';
+   var count = rows.length;
+   for (const item of rows) {
+      rowOrder += item.id;
+      if (count > 1) {
+         rowOrder += ',';
+      }
+      count--;
+   }
+   QueryDatabase(`INSERT INTO metadata_roworder (redisKey, rowOrder) VALUES ('${redisKey}', '${rowOrder}')`);
+   console.log('◻ Logged metadata_roworder');
+   const columns = query.match(/SELECT\s+(.+?)\s+FROM/i)[1].split(',').map(name => name.trim());
+   for (const item of columns) {
+      QueryDatabase(`INSERT INTO metadata_column (redisKey, columnName) VALUES ('${redisKey}', '${item}')`);
+   }
+   console.log('◻ Logged metadata_column');
+   var [columnNames] = await QueryDatabase(`SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '`+mainTable+`'`);
+   columnNames = columnNames.map(columnNames => columnNames.COLUMN_NAME);
+   conditions = query.split('FROM ')[1];
+   for (const item of columns) {
+      const regex = new RegExp(`\\b${item}\\b`, 'i');
+      if (regex.test(conditions)) {
+         QueryDatabase(`INSERT INTO metadata_columnconditions (redisKey, columnName) VALUES ('${redisKey}', '${item}')`);
+      }
+   }
+   console.log('◻ Logged metadata_columnconditions');
+}
+
+//Outdated cache handler
+
+instance.addTrigger({
+   name: 'DetectChange',
+   expression: 'redisresearch.images',
+   statement: MySQLEvents.STATEMENTS.ALL,
+   onEvent: async (event) => {
+      if (event.table != 'metadata') {
+         console.log('▶ A change in DB detected');
+         console.log('▷ Table:', event.table);
+         console.log('▷ Row:', event.affectedRows[0].before['id']);
+         const affectedColumns = event.affectedColumns.filter(item => item !== 'image');
+         console.log('▷ Column:', affectedColumns);
+         console.log('▷ Value before:', event.affectedRows[0].before[affectedColumns[0]]);
+         console.log('▷ Value after:', event.affectedRows[0].after[affectedColumns[0]]);
+      }
+   }
+})
+instance.on(MySQLEvents.EVENTS.CONNECTION_ERROR, console.error);
+instance.on(MySQLEvents.EVENTS.ZONGJI_ERROR, console.error);
 
 //Exit procedure
 
