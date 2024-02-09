@@ -1,1 +1,5 @@
 /node_modules
+/dump.rdb
+/update.sql
+/test.js
+/test copy.js

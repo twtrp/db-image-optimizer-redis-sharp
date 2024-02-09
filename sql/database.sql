@@ -14,7 +14,7 @@ CREATE TABLE `metadata_column` (
   `columnName` varchar(255) NOT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8;
 
-CREATE TABLE `metadata_columnconditions` (
+CREATE TABLE `metadata_columncondition` (
   `redisKey` varchar(255) NOT NULL,
   `columnName` varchar(255) NOT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8;
