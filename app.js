@@ -1,10 +1,9 @@
-const express = require('express');
-const mysql2 = require('mysql2');
-const mysql = require('mysql');
+const Express = require('express');
+const MySQL2 = require('mysql2');
+const MySQL = require('mysql');
 const MySQLEvents = require('@rodrigogs/mysql-events');
-const ioredis = require("ioredis");
-const sharp = require('sharp');
-const queue = require('better-queue');
+const IORedis = require("ioredis");
+const Sharp = require('sharp');
 
 //Adjustable variables
 
@@ -16,7 +15,7 @@ const sqlPassword = 'root'; //String. MySQL password.
 const sqlDatabase = 'redisresearch'; //String. MySQL password.
 const mainTable = 'images'; 
 const primaryKeyAtt = 'id';
-const imageAtt = 'image';
+const imageAtts = ['image'];
 
 const enableTTL = false; //true for false. Whether to use TTL or not. (true = cache expires, false = cache never expires)
 let TTLbase = 3600; //Integer range [1, infinity). Base time-to-live in seconds of a Redis cache
@@ -56,8 +55,8 @@ function Print(string) {
 
 //Initialize Express
 
-const app = express();
-app.use(express.static('src'));
+const app = Express();
+app.use(Express.static('src'));
 app.listen(port, () => {
    console.log(`---------------`);
    console.log(`✔ Server is running on port ${port}`);
@@ -65,11 +64,11 @@ app.listen(port, () => {
 
 //Initialize Redis
 
-const redis = new ioredis();
+const redis = new IORedis();
 
 //Initialize database
 
-const sqlConn = mysql2.createConnection({
+const sqlConn = MySQL2.createConnection({
    host: sqlHost,
    user: sqlUser,
    password: sqlPassword,
@@ -86,7 +85,7 @@ if (!enableSmartCacheReplace) {
 
 //Initialize database listener
 
-const sqlEventConn = mysql.createConnection({
+const sqlEventConn = MySQL.createConnection({
    host: sqlHost,
    user: sqlUser,
    password: sqlPassword
@@ -96,17 +95,12 @@ const instance = new MySQLEvents(sqlEventConn, {startAtEnd: true});
 if (enableSmartCacheReplace) {
    instance.start()
       .then(() => {
-         Print(`✔ Listening to change in DB`);
+         Print(`✔ Listening to change in table '${mainTable}'`);
       })
-      .catch(err => console.error('⚠︎ MySQLEvent failed to start.', err));
+      .catch(err => console.error(err));
 }
 
-//Initialize queue
-
-var q = new queue(function (input, cb) {
-})
-
-//Initialize time measurements
+//Time measurements
 
 let startTime = 0;
 let endTime = 0;
@@ -116,78 +110,81 @@ let loadTime = 0;
 function RecordResponseTime() {
    endTime = new Date().getTime();
    responseTime = endTime - startTime;
-   Print(`○ Response time: ${responseTime} ms`);
+   Print(`  ▷ Response time: ${responseTime} ms`);
 }
 
 app.get('/loadtime/:loadtime', async (req, res) => {
    loadTime = req.params.loadtime;
    if (responseTime != 0) {
-      Print(`○ Page render time: ${loadTime-responseTime} ms`);
-      Print(`○ Total load time: ${loadTime} ms`);
+      Print(`  ▷ Page render time: ${loadTime-responseTime} ms`);
+      Print(`  ▷ Total load time: ${loadTime} ms`);
    }
 })
 
 //Express API endpoints
 
 app.get('/all', async (req, res) => {
-   FetchQuery(res, 'SELECT id, image FROM images', 'all', ['id'], ['image']);
+   Fetch(res, 'SELECT id, image FROM images', 'all', ['id'], ['image']);
 })
 
 app.get('/album/:album', async (req, res) => {
    const album = req.params.album;
-   FetchQuery(res, 'SELECT id, image FROM images WHERE album='+album, 'album:'+album, ['id'], ['image']);
+   Fetch(res, 'SELECT id, image FROM images WHERE album='+album, 'album:'+album, ['id'], ['image']);
 })
 
 app.get('/id/:id', async (req, res) => {
    const id = req.params.id;
-   FetchQuery(res, 'SELECT id, image FROM images WHERE id='+id, 'id:'+id, ['id'], ['image']);
+   Fetch(res, 'SELECT id, image FROM images WHERE id='+id, 'id:'+id, ['id'], ['image']);
 })
 
-app.get('/info', async (req, res) => {
-   FetchQuery(res, 'SELECT id, album, value FROM images', 'info', ['id', 'album', 'value'], []);
-})
-
-app.get('/infotest', async (req, res) => {
-   FetchQuery(res, 'SELECT id, album, value FROM images WHERE id=1 OR album=2', 'infotest', ['id', 'album', 'value'], []);
+app.get('/test', async (req, res) => {
+   Fetch(res, 'SELECT id, album, value FROM images WHERE id=1 OR album=2', 'test', ['id', 'album', 'value'], []);
 })
 
 //Fetch function
 
-async function FetchQuery(res, query, redisKey, genericAtt, imgAtt) {
-   Print(`● API called`);
+async function Fetch(res, query, redisKey, genericAtt, imageAtt) {
+   Print(`▶ API called`);
    startTime = new Date().getTime();
    const rJson = await redis.get(redisKey);
-   Print(`○ Key: ${redisKey}`);
+   Print(`  ▷ Key: '${redisKey}'`);
    if (rJson != null) {
-      Print(`○ Cache: Hit`);
+      Print(`  ▷ Cache hit`);
       res.send(rJson);
       RecordResponseTime();
       AddTTL(redisKey);
    }
    else {
-      Print(`○ Cache: Miss`);
+      Print(`  ▷ Cache miss`);
       const [dbData] = await QueryDatabase(query);
       res.send(dbData);
       RecordResponseTime();
-      let dbJson;
-      if (enableCompression) {
-         dbJson = await CompressImage(dbData, genericAtt, imgAtt);
-      }
-      else {
-         dbJson = JSON.stringify(dbData);
-      }
-      if (enableTTL) {
-         redis.setex(redisKey, TTLbase, dbJson);
-         Print(`▷ Set key ${redisKey} with TTL ${TTLbase} s`);
-      }
-      else {
-         redis.set(redisKey, dbJson);
-         Print(`▷ Set key ${redisKey} with no TTL`);
-      }
-      Print(`▷ Approximate size in Redis: ${Math.round(dbJson.length / 1.81)} bytes`);
-      if (enableSmartCacheReplace) {
-         LogMetadata(redisKey, query);
-      }
+      PrimeCache(query, redisKey, genericAtt, imageAtt, dbData);
+   }
+}
+
+//Prime cache function
+
+async function PrimeCache (query, redisKey, genericAtt, imageAtt, dbData) {
+   Print(`◼ Cache priming begins for key '${redisKey}'`);
+   let dbJson;
+   if (enableCompression) {
+      dbJson = await CompressImage(redisKey, genericAtt, imageAtt, dbData);
+   }
+   else {
+      dbJson = JSON.stringify(dbData);
+   }
+   if (enableTTL) {
+      redis.setex(redisKey, TTLbase, dbJson);
+      Print(`  ◻ Set key '${redisKey}' with TTL ${TTLbase} s`);
+   }
+   else {
+      redis.set(redisKey, dbJson);
+      Print(`  ◻ Set key '${redisKey}' with no TTL`);
+   }
+   Print(`  ◻ Approximate size in Redis: ${Math.round(dbJson.length / 1.81)} bytes`);
+   if (enableSmartCacheReplace) {
+      LogMetadata(redisKey, query, genericAtt, imageAtt);
    }
 }
 
@@ -201,27 +198,25 @@ async function AddTTL(redisKey) {
          newTTL = TTLmax;
       }
       redis.expire(redisKey, newTTL);
-      Print(`○ Changed TTL of key ${redisKey} from ${currentTTL} to ${newTTL} s`);
+      Print(`   ▷ Changed TTL of key ${redisKey} from ${currentTTL} to ${newTTL} s`);
    }
 }
 
 //Image compression
 
-async function CompressImage(dbData, genericAtt, imgAtt) {
-   Print(`▶ Compression process begins`);
-   if (imgAtt.length == 0) {
-      Print(`▷ No images to be compressed`);
+async function CompressImage(redisKey, genericAtt, imageAtt, dbData) {
+   Print(`  ◻ Compression process begins`);
+   if (imageAtt.length == 0) {
+      Print(`     ◻ No images to be compressed`);
       return JSON.stringify(dbData);
    }
    else {
+      Print(`     ◻ Compressing images`);
       let compressedArray = [];
       let i = 1;
       for (const item of dbData) {
          let obj = {}
-         if (genericAtt == 0) {
-            Print(`▷ No generic attributes`);
-         }
-         else {
+         if (genericAtt != 0) {
             for (j = 0; j < genericAtt.length; j++) {
                obj[genericAtt[j]] = item[genericAtt[j]]
             }
@@ -230,9 +225,9 @@ async function CompressImage(dbData, genericAtt, imgAtt) {
          let height;
          let size;
          let compressQualityMapped;
-         for (j = 0; j < imgAtt.length; j++) {
-            const image = item[imgAtt[j]];
-            await sharp(image)
+         for (j = 0; j < imageAtt.length; j++) {
+            const image = item[imageAtt[j]];
+            await Sharp(image)
                .metadata()
                .then(meta => {
                   width = meta.width;
@@ -246,16 +241,16 @@ async function CompressImage(dbData, genericAtt, imgAtt) {
                      compressQualityNormalized = forceCompressQuality;
                   }
                   compressQualityMapped = Math.round(compressQualityNormalized * compressCorrection * 80);
-                  Print(`▷ Img ${i} quality: ${compressQualityMapped*1.25}%`);
+                  Print(`     ◻ '${redisKey}' Image ${i} quality: ${compressQualityMapped*1.25}%`);
                });
-            const compressedImage = await sharp(image)
+            const compressedImage = await Sharp(image)
                .webp({
                   quality: compressQualityMapped,
                   minSize: true,
                   effort: 0
                })
                .toBuffer();
-               obj[imgAtt[j]] = compressedImage;
+               obj[imageAtt[j]] = compressedImage;
          }
          compressedArray.push(obj);
          i++;
@@ -276,25 +271,25 @@ async function CheckLogEntry(redisKey) {
    }
 }
 
-async function DeleteMetaData(redisKey) {
+async function DeleteMetadata(redisKey) {
    QueryDatabase(`DELETE FROM metadata_query WHERE redisKey='${redisKey}'`);
+   Print(`◆ Deleted metadata of key '${redisKey}'`);
 }
 
-async function LogMetadata(redisKey, query) {
-   Print(`◼ Logging begins`);
+async function LogMetadata(redisKey, query, genericAtt, imageAtt) {
    const logExists = await CheckLogEntry(redisKey);
    if (logExists) {
-      DeleteMetaData(redisKey);
+      DeleteMetadata(redisKey);
    }
    QueryDatabase(`INSERT INTO metadata_query (redisKey, query) VALUES ('${redisKey}', '${query}')`);
    const [rows] = await QueryDatabase(`SELECT `+primaryKeyAtt+` FROM`+query.split('FROM')[1]);
-   for (const item of rows) {
-      QueryDatabase(`INSERT INTO metadata_row (redisKey, row) VALUES ('${redisKey}', ${item.id})`);
+   for (const row of rows) {
+      QueryDatabase(`INSERT INTO metadata_row (redisKey, row) VALUES ('${redisKey}', ${row.id})`);
    }
    var rowOrder = '';
    var count = rows.length;
-   for (const item of rows) {
-      rowOrder += item.id;
+   for (const row of rows) {
+      rowOrder += row.id;
       if (count > 1) {
          rowOrder += ',';
       }
@@ -302,80 +297,39 @@ async function LogMetadata(redisKey, query) {
    }
    QueryDatabase(`INSERT INTO metadata_roworder (redisKey, rowOrder) VALUES ('${redisKey}', '${rowOrder}')`);
    const columns = query.match(/SELECT\s+(.+?)\s+FROM/i)[1].split(',').map(name => name.trim());
-   for (const item of columns) {
-      QueryDatabase(`INSERT INTO metadata_column (redisKey, columnName) VALUES ('${redisKey}', '${item}')`);
+   for (const columnName of columns) {
+      var columnType = '';
+      if (genericAtt.includes(columnName)) {
+         columnType = 'generic';
+      }
+      else if (imageAtt.includes(columnName)) {
+         columnType = 'image';
+      }
+      QueryDatabase(`INSERT INTO metadata_column (redisKey, columnName, columnType) VALUES ('${redisKey}', '${columnName}', '${columnType}')`);
    }
    var [columnNames] = await QueryDatabase(`SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '`+mainTable+`'`);
    columnNames = columnNames.map(columnNames => columnNames.COLUMN_NAME);
    conditions = query.split('FROM ')[1];
-   for (const item of columnNames) {
-      const regex = new RegExp(`\\b${item}\\b`, 'i');
+   for (const columnName of columnNames) {
+      const regex = new RegExp(`\\b${columnName}\\b`, 'i');
       if (regex.test(conditions)) {
-         QueryDatabase(`INSERT INTO metadata_columncondition (redisKey, columnName) VALUES ('${redisKey}', '${item}')`);
+         QueryDatabase(`INSERT INTO metadata_columncondition (redisKey, columnName) VALUES ('${redisKey}', '${columnName}')`);
       }
    }
-   Print(`◻ Logged metadata done`);
+   Print(`◆ Logged metadata of key '${redisKey}'`);
 }
 
-//Smart cache replace
+//Smart cache replace: trigger
 
 if (enableSmartCacheReplace) {
    instance.addTrigger({
       name: 'DetectChange',
-      expression: 'redisresearch.images',
+      expression: `${sqlDatabase}.${mainTable}`,
       statement: MySQLEvents.STATEMENTS.ALL,
       onEvent: async (event) => {
-         Print(`◆ A change in DB detected`);
          try {
-            const changedRow = event.affectedRows[0].before['id'];
-            const changedColumns = event.affectedColumns.filter(item => item !== imageAtt);
-            const valBefore = event.affectedRows[0].before[changedColumns[0]];
-            const valAfter = event.affectedRows[0].after[changedColumns[0]];
-            Print(`◇ Row: ${changedRow}`);
-            Print(`◇ Column: ${changedColumns}`);
-            Print(`◇ Value before: ${valBefore}`);
-            Print(`◇ Value after: ${valAfter}`);
-            var potentialKeysRow = new Set();
-            var [keyRow] = await QueryDatabase(`SELECT redisKey FROM metadata_row WHERE row = ${changedRow}`);
-            if (keyRow.length != 0) {  
-               for (const item of keyRow) {
-                  potentialKeysRow.add(item.redisKey);
-               }
-            }
-            var potentialKeysColumn = new Set();
-            for (const item of changedColumns) {
-               var [keyColumn] = await QueryDatabase(`SELECT redisKey FROM metadata_column WHERE columnName = '${item}'`);
-               if (keyColumn.length != 0) { 
-                  for (const item of keyColumn) {
-                     potentialKeysColumn.add(item.redisKey);
-                  }
-               }
-            }
-            var potentialKeysCondition = new Set();
-            for (const item of changedColumns) {
-               var [keyCondition] = await QueryDatabase(`SELECT redisKey FROM metadata_columncondition WHERE columnName = '${item}'`);
-               for (const item of keyCondition) {
-                  potentialKeysCondition.add(item.redisKey);
-               }
-            }
-            if (potentialKeysRow.size != 0) {
-               Print(`◇ potentialKeysRow: ${Array.from(potentialKeysRow).join(', ')}`);
-            }
-            else {
-               Print(`◇ potentialKeysRow: (empty)`);
-            }
-            if (potentialKeysColumn.size != 0) {
-               Print(`◇ potentialKeysColumn: ${Array.from(potentialKeysColumn).join(', ')}`);
-            }
-            else {
-               Print(`◇ potentialKeysColumn: (empty)`);
-            }
-            if (potentialKeysCondition.size != 0) {
-               Print(`◇ potentialKeysCondition: ${Array.from(potentialKeysCondition).join(', ')}`);
-            }
-            else {
-               Print(`◇ potentialKeysCondition: (empty)`);
-            }
+            eventQueue.push(event);
+            setTimeout(processEventQueue, 100);
          }
          catch (error) {
             console.error(error);
@@ -386,12 +340,153 @@ if (enableSmartCacheReplace) {
    instance.on(MySQLEvents.EVENTS.ZONGJI_ERROR, console.error);
 }
 
+//Smart cache replace: batch processing
+
+const eventQueue = [];
+var isProcessingEvents = false;
+
+async function processEventQueue() {
+   if (eventQueue.length != 0 || !isProcessingEvents) {
+      isProcessingEvents = true;
+      try {
+         const event = eventQueue[0];
+         var changedColumns = event.affectedColumns.filter(column => !imageAtts.includes(column));
+         var batchChangedRows = [];
+         var batchValBefore = [];
+         var batchValAfter = [];
+         while (eventQueue.length > 0) {
+            const event = eventQueue.shift();
+            batchChangedRows.push(event.affectedRows[0].before['id']);
+            batchValBefore.push(event.affectedRows[0].before[changedColumns[0]])
+            batchValAfter.push(event.affectedRows[0].after[changedColumns[0]]);
+         }
+         await SmartCacheReplace(batchChangedRows, changedColumns, batchValBefore, batchValAfter);
+      }
+      catch (error) {
+         console.error(error);
+      }
+      finally {
+         isProcessingEvents = false;
+      }
+   }
+}
+
+//Smart cache replace: function
+
+async function SmartCacheReplace(batchChangedRows, changedColumns, batchValBefore, batchValAfter) {
+   Print(`★ A change is detected in database at:`);
+   Print(`  ☆ Row: ${batchChangedRows.join(', ')}`);
+   Print(`  ☆ Column: ${changedColumns.join(', ')}`);
+   Print(`  ☆ Value before: ${batchValBefore.join(', ')}`);
+   Print(`  ☆ Value after: ${batchValAfter.join(', ')}`);
+   Print(`  ☆ Affected keys begins`);
+   Print(`     ☆ Based on selected rows ∩ columns`);
+   var potentialKeysRow = new Set();
+   for (const row of batchChangedRows) {
+      var [keyRow] = await QueryDatabase(`SELECT redisKey FROM metadata_row WHERE row = ${row}`);
+      if (keyRow.length != 0) {  
+         for (const key of keyRow) {
+            potentialKeysRow.add(key.redisKey);
+         }
+      }
+   }
+   var potentialKeysColumn = new Set();
+   for (const columnName of changedColumns) {
+      var [keyColumn] = await QueryDatabase(`SELECT redisKey FROM metadata_column WHERE columnName = '${columnName}'`);
+      if (keyColumn.length != 0) { 
+         for (const key of keyColumn) {
+            potentialKeysColumn.add(key.redisKey);
+         }
+      }
+   }
+   if (potentialKeysRow.size != 0) {
+      Print(`        ☆ Potentially affected keys based on row: ${Array.from(potentialKeysRow).map(key => `'${key}'`).join(', ')}`);
+   }
+   else {
+      Print(`        ☆ Potentially affected keys based on row: (none)`);
+   }
+   if (potentialKeysColumn.size != 0) {
+      Print(`        ☆ Potentially affected keys based on column: ${Array.from(potentialKeysColumn).map(key => `'${key}'`).join(', ')}`);
+   }
+   else {
+      Print(`        ☆ Potentially affected keys based on column: (none)`);
+   }
+   var affectedKeys = new Set([...potentialKeysRow].filter(x => potentialKeysColumn.has(x)));
+   if (affectedKeys.size != 0) {
+      Print(`        ☆ Affected keys based on rows ∩ columns: ${Array.from(affectedKeys).map(key => `'${key}'`).join(', ')}`);
+   }
+   else {
+      Print(`        ☆ Affected keys based on rows ∩ columns: (none)`);
+   }
+   Print(`     ☆ Based on row order testing from query conditions`);
+   var potentialKeysCondition = new Set();
+   for (const columnName of changedColumns) {
+      var [keyCondition] = await QueryDatabase(`SELECT redisKey FROM metadata_columncondition WHERE columnName = '${columnName}'`);
+      for (const key of keyCondition) {
+         potentialKeysCondition.add(key.redisKey);
+      }
+   }
+   if (potentialKeysCondition.size != 0) {
+      Print(`        ☆ Potentially affected keys based on query condition: ${Array.from(potentialKeysCondition).map(key => `'${key}'`).join(', ')}`);
+   }
+   else {
+      Print(`        ☆ Potentially affected keys based on query condition: (none)`);
+   }
+   for (const redisKey of potentialKeysCondition) {
+      const [testQuery] = await QueryDatabase(`SELECT query FROM metadata_query WHERE redisKey = '${redisKey}'`);
+      const testConditions = testQuery[0].query.split('FROM ')[1];
+      const [testResult] = await QueryDatabase(`SELECT ${primaryKeyAtt} FROM ${testConditions}`);
+      var rowOrderTest = '';
+      var count = testResult.length;
+      for (const row of testResult) {
+         rowOrderTest += row.id;
+         if (count > 1) {
+            rowOrderTest += ',';
+         }
+         count--;
+      }
+      const [rowOrderResult] = await QueryDatabase(`SELECT rowOrder FROM metadata_roworder WHERE redisKey = '${redisKey}'`);
+      const rowOrderReal = rowOrderResult[0].rowOrder;
+      if (rowOrderTest != rowOrderReal) {
+         affectedKeys.add(redisKey);
+         Print(`        ☆ '${redisKey}' is affected based from row order testing`);
+      }
+      else {
+         Print(`        ☆ '${redisKey}' remains the same based from row order testing`);
+      }
+   }
+   if (affectedKeys.size != 0) {
+      Print(`  ☆ All affected keys: ${Array.from(affectedKeys).join(', ')}`);
+   }
+   else {
+      Print(`  ☆ All affected keys: (none)`);
+   }
+   for (const redisKey of affectedKeys) {
+      const ttl = await redis.ttl(redisKey);
+      if (ttl >= -1) {
+         redis.del(redisKey);
+         var [query] = await QueryDatabase(`SELECT query FROM metadata_query WHERE redisKey = '${redisKey}'`);
+         query = query[0].query;
+         const [dbData] = await QueryDatabase(query);
+         var [genericAtt] = await QueryDatabase(`SELECT columnName FROM metadata_column WHERE redisKey = '${redisKey}' AND columnType = 'generic'`);
+         var [imageAtt] = await QueryDatabase(`SELECT columnName FROM metadata_column WHERE redisKey = '${redisKey}' AND columnType = 'image'`);
+         genericAtt = genericAtt.map(name => name.columnName);
+         imageAtt = imageAtt.map(name => name.columnName);
+         PrimeCache(query, redisKey, genericAtt, imageAtt, dbData);
+      }
+      else {
+         Print(`  ☆ '${redisKey}' has expired.`)
+         DeleteMetadata(redisKey);
+      }
+   }
+}
+
 //Exit procedure
 
 process.on('SIGINT', async () => {
-   Print(`⌫  Exiting...`);
    await redis.bgsave();
    Print(`⌫  Saved snapshot to dump.rdb`);
+   Print(`⌫  Exiting...`);
    console.log(`---------------`);
    sqlConn.end();
    redis.quit();

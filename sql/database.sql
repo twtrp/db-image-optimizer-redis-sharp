@@ -11,7 +11,8 @@ CREATE TABLE `images` (
 
 CREATE TABLE `metadata_column` (
   `redisKey` varchar(255) NOT NULL,
-  `columnName` varchar(255) NOT NULL
+  `columnName` varchar(255) NOT NULL,
+  `columnType` enum('generic','image') NOT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8;
 
 CREATE TABLE `metadata_columncondition` (
