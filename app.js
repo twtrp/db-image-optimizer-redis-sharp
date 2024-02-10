@@ -241,7 +241,7 @@ async function CompressImage(redisKey, genericAtt, imageAtt, dbData) {
                      compressQualityNormalized = forceCompressQuality;
                   }
                   compressQualityMapped = Math.round(compressQualityNormalized * compressCorrection * 80);
-                  Print(`     ◻ '${redisKey}' Image ${i} quality: ${compressQualityMapped*1.25}%`);
+                  Print(`     ◻ '${redisKey}' image ${i} quality: ${compressQualityMapped*1.25}%`);
                });
             const compressedImage = await Sharp(image)
                .webp({
@@ -456,7 +456,7 @@ async function SmartCacheReplace(batchChangedRows, changedColumns, batchValBefor
       }
    }
    if (affectedKeys.size != 0) {
-      Print(`  ☆ All affected keys: ${Array.from(affectedKeys).join(', ')}`);
+      Print(`  ☆ All affected keys: ${Array.from(affectedKeys).map(key => `'${key}'`).join(', ')}`);
    }
    else {
       Print(`  ☆ All affected keys: (none)`);
