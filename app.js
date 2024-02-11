@@ -13,9 +13,9 @@ const sqlHost = 'localhost'; //String. Address of the webpage.
 const sqlUser = 'root'; //String. MySQL user.
 const sqlPassword = 'root'; //String. MySQL password.
 const sqlDatabase = 'redisresearch'; //String. MySQL password.
-const mainTable = 'images'; 
-const primaryKeyAtt = 'id';
-const imageAtts = ['image'];
+const mainTable = 'images'; //String. Name of the target database table
+const primaryKeyAtt = 'id'; //String. Primary key of the target database table
+const imageAtts = ['image']; //String. Image attributes of the target database table
 
 const enableTTL = false; //true for false. Whether to use TTL or not. (true = cache expires, false = cache never expires)
 let TTLbase = 3600; //Integer range [1, infinity). Base time-to-live in seconds of a Redis cache
@@ -352,15 +352,11 @@ async function processEventQueue() {
          const event = eventQueue[0];
          var changedColumns = event.affectedColumns.filter(column => !imageAtts.includes(column));
          var batchChangedRows = [];
-         var batchValBefore = [];
-         var batchValAfter = [];
          while (eventQueue.length > 0) {
             const event = eventQueue.shift();
             batchChangedRows.push(event.affectedRows[0].before['id']);
-            batchValBefore.push(event.affectedRows[0].before[changedColumns[0]])
-            batchValAfter.push(event.affectedRows[0].after[changedColumns[0]]);
          }
-         await SmartCacheReplace(batchChangedRows, changedColumns, batchValBefore, batchValAfter);
+         await SmartCacheReplace(batchChangedRows, changedColumns);
       }
       catch (error) {
          console.error(error);
@@ -373,12 +369,10 @@ async function processEventQueue() {
 
 //Smart cache replace: function
 
-async function SmartCacheReplace(batchChangedRows, changedColumns, batchValBefore, batchValAfter) {
+async function SmartCacheReplace(batchChangedRows, changedColumns) {
    Print(`★ A change is detected in database at:`);
    Print(`  ☆ Row: ${batchChangedRows.join(', ')}`);
    Print(`  ☆ Column: ${changedColumns.join(', ')}`);
-   Print(`  ☆ Value before: ${batchValBefore.join(', ')}`);
-   Print(`  ☆ Value after: ${batchValAfter.join(', ')}`);
    Print(`  ☆ Affected keys begins`);
    Print(`     ☆ Based on selected rows ∩ columns`);
    var potentialKeysRow = new Set();
