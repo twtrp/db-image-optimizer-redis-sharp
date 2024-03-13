@@ -90,6 +90,8 @@ if (!enableSmartCacheReplace) {
    QueryDatabase(`DELETE FROM metadata_query`);
 }
 
+const test = QueryDatabase()
+
 //Initialize database listener
 
 const sqlEventConn = MySQL.createConnection({
@@ -102,7 +104,7 @@ const instance = new MySQLEvents(sqlEventConn, {startAtEnd: true});
 if (enableSmartCacheReplace) {
    instance.start()
       .then(() => {
-         Print(`✔ Listening to change in table '${mainTable}'`);
+         Print(`✔ Listening to change in database`);
       })
       .catch(err => console.error(err));
 }
