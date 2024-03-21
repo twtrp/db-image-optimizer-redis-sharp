@@ -14,8 +14,8 @@ const sqlUser = 'root'; //String. MySQL user.
 const sqlPassword = 'root'; //String. MySQL password.
 const sqlDatabase = 'redisresearch'; //String. MySQL password.
 const mainTable = 'images'; //String. Name of the target database table
-const primaryKeyAtt = 'id'; //String. Primary key of the target database table
-const imageAtts = ['image']; //String. Image attributes of the target database table
+const primaryKeyCol = 'id'; //String. Primary key of the target database table
+const imageCols = ['image']; //String. Image columns of the target database table
 
 module.exports = {
    sqlHost: sqlHost,
@@ -150,7 +150,7 @@ app.get('/test', async (req, res) => {
 
 //Fetch function
 
-async function Fetch(res, query, redisKey, genericAtt, imageAtt) {
+async function Fetch(res, query, redisKey, genericCol, imageCol) {
    Print(`▶ API called`);
    startTime = new Date().getTime();
    const rJson = await redis.get(redisKey);
@@ -166,17 +166,17 @@ async function Fetch(res, query, redisKey, genericAtt, imageAtt) {
       const [dbData] = await QueryDatabase(query);
       res.send(dbData);
       RecordResponseTime();
-      PrimeCache(query, redisKey, genericAtt, imageAtt, dbData, ttlBase);
+      PrimeCache(query, redisKey, genericCol, imageCol, dbData, ttlBase);
    }
 }
 
 //Prime cache function
 
-async function PrimeCache (query, redisKey, genericAtt, imageAtt, dbData, ttl) {
+async function PrimeCache (query, redisKey, genericCol, imageCol, dbData, ttl) {
    Print(`◼ Cache priming begins for key '${redisKey}'`);
    let dbJson;
    if (enableCompression) {
-      dbJson = await CompressImage(redisKey, genericAtt, imageAtt, dbData);
+      dbJson = await CompressImage(redisKey, genericCol, imageCol, dbData);
    }
    else {
       dbJson = JSON.stringify(dbData);
@@ -191,7 +191,7 @@ async function PrimeCache (query, redisKey, genericAtt, imageAtt, dbData, ttl) {
    }
    Print(`  ◻ Approximate size in Redis: ${Math.round(dbJson.length / 1.81)} bytes`);
    if (enableSmartCacheReplace) {
-      LogMetadata(redisKey, query, genericAtt, imageAtt);
+      LogMetadata(redisKey, query, genericCol, imageCol);
    }
 }
 
@@ -211,9 +211,9 @@ async function AddTTL(redisKey) {
 
 //Image compression
 
-async function CompressImage(redisKey, genericAtt, imageAtt, dbData) {
+async function CompressImage(redisKey, genericCol, imageCol, dbData) {
    Print(`  ◻ Compression process begins`);
-   if (imageAtt.length == 0) {
+   if (imageCol.length == 0) {
       Print(`     ◻ No images to be compressed`);
       return JSON.stringify(dbData);
    }
@@ -223,17 +223,17 @@ async function CompressImage(redisKey, genericAtt, imageAtt, dbData) {
       let i = 1;
       for (const item of dbData) {
          let obj = {}
-         if (genericAtt != 0) {
-            for (j = 0; j < genericAtt.length; j++) {
-               obj[genericAtt[j]] = item[genericAtt[j]]
+         if (genericCol != 0) {
+            for (j = 0; j < genericCol.length; j++) {
+               obj[genericCol[j]] = item[genericCol[j]]
             }
          }
          let width;
          let height;
          let size;
          let compressQualityMapped;
-         for (j = 0; j < imageAtt.length; j++) {
-            const image = item[imageAtt[j]];
+         for (j = 0; j < imageCol.length; j++) {
+            const image = item[imageCol[j]];
             await Sharp(image)
                .metadata()
                .then(meta => {
@@ -257,7 +257,7 @@ async function CompressImage(redisKey, genericAtt, imageAtt, dbData) {
                   effort: 0
                })
                .toBuffer();
-               obj[imageAtt[j]] = compressedImage;
+               obj[imageCol[j]] = compressedImage;
          }
          compressedArray.push(obj);
          i++;
@@ -283,13 +283,13 @@ async function DeleteMetadata(redisKey) {
    Print(`◆ Deleted metadata of key '${redisKey}'`);
 }
 
-async function LogMetadata(redisKey, query, genericAtt, imageAtt) {
+async function LogMetadata(redisKey, query, genericCol, imageCol) {
    const logExists = await CheckLogEntry(redisKey);
    if (logExists) {
       DeleteMetadata(redisKey);
    }
    QueryDatabase(`INSERT INTO metadata_query (redisKey, query) VALUES ('${redisKey}', '${query}')`);
-   const [rows] = await QueryDatabase(`SELECT `+primaryKeyAtt+` FROM`+query.split('FROM')[1]);
+   const [rows] = await QueryDatabase(`SELECT `+primaryKeyCol+` FROM`+query.split('FROM')[1]);
    for (const row of rows) {
       QueryDatabase(`INSERT INTO metadata_row (redisKey, row) VALUES ('${redisKey}', ${row.id})`);
    }
@@ -306,10 +306,10 @@ async function LogMetadata(redisKey, query, genericAtt, imageAtt) {
    const columns = query.match(/SELECT\s+(.+?)\s+FROM/i)[1].split(',').map(name => name.trim());
    for (const columnName of columns) {
       var columnType = '';
-      if (genericAtt.includes(columnName)) {
+      if (genericCol.includes(columnName)) {
          columnType = 'generic';
       }
-      else if (imageAtt.includes(columnName)) {
+      else if (imageCol.includes(columnName)) {
          columnType = 'image';
       }
       QueryDatabase(`INSERT INTO metadata_column (redisKey, columnName, columnType) VALUES ('${redisKey}', '${columnName}', '${columnType}')`);
@@ -357,7 +357,7 @@ async function processEventQueue() {
       isProcessingEvents = true;
       try {
          const event = eventQueue[0];
-         var changedColumns = event.affectedColumns.filter(column => !imageAtts.includes(column));
+         var changedColumns = event.affectedColumns.filter(column => !imageCols.includes(column));
          var batchChangedRows = [];
          while (eventQueue.length > 0) {
             const event = eventQueue.shift();
@@ -436,7 +436,7 @@ async function SmartCacheReplace(batchChangedRows, changedColumns) {
    for (const redisKey of potentialKeysCondition) {
       const [testQuery] = await QueryDatabase(`SELECT query FROM metadata_query WHERE redisKey = '${redisKey}'`);
       const testConditions = testQuery[0].query.split('FROM ')[1];
-      const [testResult] = await QueryDatabase(`SELECT ${primaryKeyAtt} FROM ${testConditions}`);
+      const [testResult] = await QueryDatabase(`SELECT ${primaryKeyCol} FROM ${testConditions}`);
       var rowOrderTest = '';
       var count = testResult.length;
       for (const row of testResult) {
@@ -469,11 +469,11 @@ async function SmartCacheReplace(batchChangedRows, changedColumns) {
          var [query] = await QueryDatabase(`SELECT query FROM metadata_query WHERE redisKey = '${redisKey}'`);
          query = query[0].query;
          const [dbData] = await QueryDatabase(query);
-         var [genericAtt] = await QueryDatabase(`SELECT columnName FROM metadata_column WHERE redisKey = '${redisKey}' AND columnType = 'generic'`);
-         var [imageAtt] = await QueryDatabase(`SELECT columnName FROM metadata_column WHERE redisKey = '${redisKey}' AND columnType = 'image'`);
-         genericAtt = genericAtt.map(name => name.columnName);
-         imageAtt = imageAtt.map(name => name.columnName);
-         PrimeCache(query, redisKey, genericAtt, imageAtt, dbData, ttl);
+         var [genericCol] = await QueryDatabase(`SELECT columnName FROM metadata_column WHERE redisKey = '${redisKey}' AND columnType = 'generic'`);
+         var [imageCol] = await QueryDatabase(`SELECT columnName FROM metadata_column WHERE redisKey = '${redisKey}' AND columnType = 'image'`);
+         genericCol = genericCol.map(name => name.columnName);
+         imageCol = imageCol.map(name => name.columnName);
+         PrimeCache(query, redisKey, genericCol, imageCol, dbData, ttl);
       }
       else {
          Print(`  ☆ '${redisKey}' has expired.`)

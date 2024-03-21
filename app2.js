@@ -82,36 +82,41 @@ if (!enableSmartCacheReplace) {
 }
 
 var tableList = [];
-var imageAttList = [];
-var genericAttList = [];
-var primaryAttSet = {};
+var allColList = [];
+var imageColList = [];
+var genericColList = [];
+var primaryColSet = {};
 
 (async () => {
    [tableList] = await QueryDatabase(`SELECT table_name FROM information_schema.tables WHERE table_schema = '${sqlDatabase}' AND table_name NOT LIKE 'metadata_%';`);
    tableList = tableList.map(tableList => tableList.table_name);
    for (const tableName of tableList) {
-      const [attributes] = await QueryDatabase(`SELECT column_name FROM information_schema.columns WHERE table_name = '${tableName}';`);
-      for (const item of attributes) {
-         const attributeName = item.column_name;
-         var [dataType] = await QueryDatabase(`SELECT data_type FROM information_schema.columns WHERE table_name = '${tableName}' AND column_name = '${attributeName}';`)
+      const [columns] = await QueryDatabase(`SELECT column_name FROM information_schema.columns WHERE table_name = '${tableName}';`);
+      for (const item of columns) {
+         const columnName = item.column_name;
+         allColList.push({
+            table: tableName,
+            column: columnName
+         })
+         var [dataType] = await QueryDatabase(`SELECT data_type FROM information_schema.columns WHERE table_name = '${tableName}' AND column_name = '${columnName}';`)
          dataType = dataType[0].data_type;
          const regex = /blob/;
          if (regex.test(dataType)) {
-            imageAttList.push({
+            imageColList.push({
                table: tableName,
-               attribute: attributeName
+               column: columnName
             })
          }
          else {
-            genericAttList.push({
+            genericColList.push({
                table: tableName,
-               attribute: attributeName
+               column: columnName
             })
          }
       }
       var [primaryKeys] = await QueryDatabase(`SELECT column_name FROM information_schema.key_column_usage WHERE table_name = '${tableName}' AND constraint_name = 'PRIMARY';`)
       primaryKeys = primaryKeys.map(primaryKeys => primaryKeys.column_name);
-      primaryAttSet[tableName] = primaryKeys;
+      primaryColSet[tableName] = primaryKeys;
    }
    if (enableSmartCacheReplace) {
       for (const table of tableList) {
@@ -134,9 +139,10 @@ var primaryAttSet = {};
       instance.on(MySQLEvents.EVENTS.ZONGJI_ERROR, console.error);
    }
    console.log('tableList =', tableList);
-   console.log('imageAttList =', imageAttList);
-   console.log('genericAttList =', genericAttList);
-   console.log('primaryAttSet =', primaryAttSet);
+   console.log('allColList =', allColList)
+   console.log('imageColList =', imageColList);
+   console.log('genericColList =', genericColList);
+   console.log('primaryColSet =', primaryColSet);
 })()
 
 //Clear cache and metadata on startup for testing
@@ -211,6 +217,10 @@ app.get('/test2', async (req, res) => {
    Fetch(res, 'SELECT images.id, images.image, testtable.info FROM images INNER JOIN testtable ON images.id = testtable.id', 'test2');
 })
 
+app.get('/test3', async (req, res) => {
+   Fetch(res, 'SELECT testtable.id, images.image, testtable.info FROM images INNER JOIN testtable ON images.id = testtable.id WHERE images.album = 1', 'test3');
+})
+
 //Fetch function
 
 async function Fetch(res, query, redisKey) {
@@ -239,22 +249,22 @@ async function PrimeCache(query, redisKey, dbData, ttl) {
    Print(`◼ Cache priming begins for key '${redisKey}'`);
    const regex = /SELECT\s+([\w.,\s]+)\s+FROM\s+(\w+)/i;
    const regexResults = query.match(regex);
-   const selectedAttributes = regexResults[1];
+   const selectedcolumns = regexResults[1];
    const tableName = regexResults[2];
-   const selectedList = selectedAttributes.split(',').map(item => {
+   const selectedList = selectedcolumns.split(',').map(item => {
       const parts = item.trim().split('.');
-      var table, attribute;
+      var table, column;
       if (parts.length > 1) {
          table = parts[0];
-         attribute = parts[1];
+         column = parts[1];
       }
       else {
          table = tableName;
-         attribute = parts[0];
+         column = parts[0];
       }
       return {
          table: table,
-         attribute: attribute
+         column: column
       };
    });
    var selectedTableList = [];
@@ -264,10 +274,10 @@ async function PrimeCache(query, redisKey, dbData, ttl) {
       if (tableList.includes(item.table) && !selectedTableList.includes(item.table)) {
          selectedTableList.push(item.table);
       }
-      if (genericAttList.some(att => att.table.toUpperCase() === item.table.toUpperCase() && att.attribute.toUpperCase() === item.attribute.toUpperCase())) {
+      if (genericColList.some(Col => Col.table.toUpperCase() === item.table.toUpperCase() && Col.column.toUpperCase() === item.column.toUpperCase())) {
          selectedGenericList.push(item);
       }
-      else if (imageAttList.some(att => att.table.toUpperCase() === item.table.toUpperCase() && att.attribute.toUpperCase() === item.attribute.toUpperCase())) {
+      else if (imageColList.some(Col => Col.table.toUpperCase() === item.table.toUpperCase() && Col.column.toUpperCase() === item.column.toUpperCase())) {
          selectedImageList.push(item);
       }
    }
@@ -288,8 +298,9 @@ async function PrimeCache(query, redisKey, dbData, ttl) {
    }
    Print(`  ◻ Approximate size in Redis: ${Math.round(dbJson.length / 1.81)} bytes`);
    if (enableSmartCacheReplace) {
-      LogMetadata(redisKey, dbData, query, selectedTableList, selectedImageList, selectedGenericList);
+      LogMetadata(redisKey, query, selectedTableList, selectedList);
    }
+   console.log('query =', query);
    console.log('selectedList =', selectedList);
    console.log('selectedTableList =', selectedTableList);
    console.log('selectedImageList =', selectedImageList);
@@ -326,7 +337,7 @@ async function CompressImage(redisKey, dbData, selectedImageList, selectedGeneri
          let obj = {}
          if (selectedGenericList != 0) {
             for (j = 0; j < selectedGenericList.length; j++) {
-               obj[selectedGenericList[j].attribute] = item[selectedGenericList[j].attribute];
+               obj[selectedGenericList[j].column] = item[selectedGenericList[j].column];
             }
          }
          let width;
@@ -334,7 +345,7 @@ async function CompressImage(redisKey, dbData, selectedImageList, selectedGeneri
          let size;
          let compressQualityMapped;
          for (j = 0; j < selectedImageList.length; j++) {
-            const image = item[selectedImageList[j].attribute];
+            const image = item[selectedImageList[j].column];
             await Sharp(image)
                .metadata()
                .then(meta => {
@@ -358,7 +369,7 @@ async function CompressImage(redisKey, dbData, selectedImageList, selectedGeneri
                   effort: 0
                })
                .toBuffer();
-               obj[selectedImageList[j].attribute] = compressedImage;
+               obj[selectedImageList[j].column] = compressedImage;
          }
          compressedArray.push(obj);
          i++;
@@ -384,56 +395,42 @@ async function DeleteMetadata(redisKey) {
    Print(`◆ Deleted metadata of key '${redisKey}'`);
 }
 
-async function LogMetadata(redisKey, dbData, query, selectedTableList, selectedImageList, selectedGenericList) {
+async function LogMetadata(redisKey, query, selectedTableList, selectedList) {
    const logExists = await CheckLogEntry(redisKey);
    if (logExists) {
       DeleteMetadata(redisKey);
    }
    await QueryDatabase(`INSERT INTO metadata_query (redisKey, query) VALUES ('${redisKey}', '${query}')`);
    for (const table of selectedTableList) {
-      var primaryKeys = primaryAttSet[table];
+      var primaryKeys = primaryColSet[table];
       primaryKeys = primaryKeys.map(key => `${table}.${key}`);
       var [rows] = await QueryDatabase(`SELECT ${primaryKeys.join(',')} FROM ${query.split('FROM')[1]}`);
       rows = rows.map(obj => Object.values(obj).join(', '));
-      console.log(rows);
       var i = 0;
       for (const row of rows) {
-         await QueryDatabase("INSERT INTO `metadata_row` (`redisKey`, `table`, `rowOrder`, `primaryKey`) VALUES ('"+redisKey+"', '"+table+"', "+i+", '"+row+"')");
+         await QueryDatabase(`INSERT INTO metadata_row (redisKey, tableName, rowOrder, primaryKey) VALUES ('${redisKey}', '${table}', ${i}, '${row}')`);
          i++;
       }
    }
-
-   // var count = dbData.length;
-   // var rowOrder = '';
-//    for (const row of rows) {
-//       rowOrder += row.id;
-//       if (count > 1) {
-//          rowOrder += ',';
-//       }
-//       count--;
-//    }
-//    QueryDatabase(`INSERT INTO metadata_roworder (redisKey, rowOrder) VALUES ('${redisKey}', '${rowOrder}')`);
-//    const columns = query.match(/SELECT\s+(.+?)\s+FROM/i)[1].split(',').map(name => name.trim());
-//    for (const columnName of columns) {
-//       var columnType = '';
-//       // if (genericAtt.includes(columnName)) {
-//       //    columnType = 'generic';
-//       // }
-//       // else if (imageAtt.includes(columnName)) {
-//       //    columnType = 'image';
-//       // }
-//       QueryDatabase(`INSERT INTO metadata_column (redisKey, columnName, columnType) VALUES ('${redisKey}', '${columnName}', '${columnType}')`);
-//    }
-//    //var [columnNames] = await QueryDatabase(`SELECT column_name FROM information_schema.columns WHERE table_name = '${mainTable}'`);
-//    columnNames = columnNames.map(columnNames => columnNames.column_name);
-//    conditions = query.split('FROM ')[1];
-//    for (const columnName of columnNames) {
-//       const regex = new RegExp(`\\b${columnName}\\b`, 'i');
-//       if (regex.test(conditions)) {
-//          QueryDatabase(`INSERT INTO metadata_columncondition (redisKey, columnName) VALUES ('${redisKey}', '${columnName}')`);
-//       }
-//    }
-//    Print(`◆ Logged metadata of key '${redisKey}'`);
+   for (const item of selectedList) {
+      await QueryDatabase(`INSERT INTO metadata_column (redisKey, tableName, columnName) VALUES ('${redisKey}', '${item.table}', '${item.column}')`);
+   }
+   const conditionString = query.split('FROM ')[1];
+   const regex = /\b(\w+)\.(\w+)\b/g;
+   var match;
+   const output = [];
+   while ((match = regex.exec(conditionString)) !== null) {
+      const [, table, column] = match;
+      output.push({ table, column });
+   }
+   const conditionList = output.filter(({ table, column }) => {
+      return allColList.some(item => item.table === table && item.column === column);
+   });
+   console.log('conditionList =', conditionList);
+   for (const item of conditionList) {
+      await QueryDatabase(`INSERT INTO metadata_columncondition (redisKey, tableName, columnName) VALUES ('${redisKey}', '${item.table}', '${item.column}')`);
+   }
+   Print(`◆ Logged metadata of key '${redisKey}'`);
 }
 
 //Smart cache replace: batch processing
@@ -446,13 +443,15 @@ async function processEventQueue() {
       isProcessingEvents = true;
       try {
          const event = eventQueue[0];
-         //var changedColumns = event.affectedColumns.filter(column => !imageAtts.includes(column));
+         var changedColumns = event.affectedColumns.filter(item => !imageColList.includes(item.column));
          var batchChangedRows = [];
          while (eventQueue.length > 0) {
             const event = eventQueue.shift();
             batchChangedRows.push(event.affectedRows[0].before['id']);
          }
-         await SmartCacheReplace(batchChangedRows, changedColumns);
+         console.log(batchChangedRows);
+         console.log(changedColumns);
+         //await SmartCacheReplace(batchChangedRows, changedColumns);
       }
       catch (error) {
          console.error(error);
@@ -525,7 +524,7 @@ async function SmartCacheReplace(batchChangedRows, changedColumns) {
    for (const redisKey of potentialKeysCondition) {
       const [testQuery] = await QueryDatabase(`SELECT query FROM metadata_query WHERE redisKey = '${redisKey}'`);
       const testConditions = testQuery[0].query.split('FROM ')[1];
-      //const [testResult] = await QueryDatabase(`SELECT ${primaryKeyAtt} FROM ${testConditions}`);
+      //const [testResult] = await QueryDatabase(`SELECT ${primaryKeyCol} FROM ${testConditions}`);
       var rowOrderTest = '';
       var count = testResult.length;
       for (const row of testResult) {
@@ -558,11 +557,11 @@ async function SmartCacheReplace(batchChangedRows, changedColumns) {
          var [query] = await QueryDatabase(`SELECT query FROM metadata_query WHERE redisKey = '${redisKey}'`);
          query = query[0].query;
          const [dbData] = await QueryDatabase(query);
-         var [genericAtt] = await QueryDatabase(`SELECT columnName FROM metadata_column WHERE redisKey = '${redisKey}' AND columnType = 'generic'`);
-         var [imageAtt] = await QueryDatabase(`SELECT columnName FROM metadata_column WHERE redisKey = '${redisKey}' AND columnType = 'image'`);
-         genericAtt = genericAtt.map(name => name.columnName);
-         imageAtt = imageAtt.map(name => name.columnName);
-         PrimeCache(query, redisKey, genericAtt, imageAtt, dbData, ttl);
+         var [genericCol] = await QueryDatabase(`SELECT columnName FROM metadata_column WHERE redisKey = '${redisKey}' AND columnType = 'generic'`);
+         var [imageCol] = await QueryDatabase(`SELECT columnName FROM metadata_column WHERE redisKey = '${redisKey}' AND columnType = 'image'`);
+         genericCol = genericCol.map(name => name.columnName);
+         imageCol = imageCol.map(name => name.columnName);
+         PrimeCache(query, redisKey, genericCol, imageCol, dbData, ttl);
       }
       else {
          Print(`  ☆ '${redisKey}' has expired.`);
