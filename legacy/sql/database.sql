@@ -11,10 +11,11 @@ CREATE TABLE `images` (
 
 CREATE TABLE `metadata_column` (
   `redisKey` varchar(255) NOT NULL,
-  `columnName` varchar(255) NOT NULL
+  `columnName` varchar(255) NOT NULL,
+  `columnType` enum('generic','image') NOT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8;
 
-CREATE TABLE `metadata_columnconditions` (
+CREATE TABLE `metadata_columncondition` (
   `redisKey` varchar(255) NOT NULL,
   `columnName` varchar(255) NOT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8;
@@ -43,7 +44,7 @@ ALTER TABLE `images`
 ALTER TABLE `metadata_column`
   ADD PRIMARY KEY (`redisKey`,`columnName`);
 
-ALTER TABLE `metadata_columnconditions`
+ALTER TABLE `metadata_columncondition`
   ADD PRIMARY KEY (`redisKey`,`columnName`);
 
 ALTER TABLE `metadata_query`
