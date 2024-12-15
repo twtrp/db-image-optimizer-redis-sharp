@@ -14,7 +14,7 @@ const sqlUser = 'root'; //String. Default: root. MySQL user.
 const sqlPassword = 'root'; //String. Default: root. MySQL password.
 const sqlDatabase = 'redisresearch'; //String. Default: redisresearch. MySQL password.
 
-const enableTTL = false; //true for false. Whether to use TTL or not. (true = cache expires, false = cache never expires)
+const enableTTL = true; //true for false. Whether to use TTL or not. (true = cache expires, false = cache never expires)
 let ttlBase = 3600; //Integer range [1, infinity). Default: 3600. Base time-to-live in seconds of a Redis cache
 let ttlMax = 21600; //Integer range [1, infinity). Default: 21600. Maximum time-to-live in seconds of a Redis cache
 
@@ -34,7 +34,7 @@ const enableClearCacheOnStartup = true; //true or false. Default: false. Whether
 
 port = Math.round(Math.max(port, 1000));
 ttlBase = Math.round(Math.max(ttlBase, 1));
-ttlMax = Math.round(Math.max(ttlBase, 1));
+ttlMax = Math.round(Math.max(ttlMax, 1));
 compressStiffness = Math.max(compressStiffness, 0.01);
 compressQualityMin = Math.min(Math.max(compressQualityMin, 0.01), 1);
 compressQualityMax = Math.min(Math.max(compressQualityMax, 0.01), 1);
@@ -311,10 +311,10 @@ async function PrimeCache(query, redisKey, dbData, ttl) {
 
 async function AddTTL(redisKey) {
    if (enableTTL) {
-      const ttlCurrent = await redis.ttl(redisKey);
-      let newTTL = ttlCurrent + ttlBase;
+      const currentTTL = await redis.ttl(redisKey);
+      let newTTL = currentTTL + ttlBase;
       if (newTTL > ttlMax) {
-         newTTL = ttlMax;
+        newTTL = ttlMax;
       }
       redis.expire(redisKey, newTTL);
       Print(`   ▷ Changed TTL of key ${redisKey} from ${currentTTL} to ${newTTL} s`);
@@ -401,14 +401,24 @@ async function LogMetadata(redisKey, query, selectedTableList, selectedList) {
       DeleteMetadata(redisKey);
    }
    await QueryDatabase(`INSERT INTO metadata_query (redisKey, query) VALUES ('${redisKey}', '${query}')`);
+   var allPrimaryKeys = [];
+   for (const table of selectedTableList) {
+      var primaryKeys = primaryColSet[table];
+      primaryKeys = primaryKeys.map(key => `${table}.${key}`);
+      allPrimaryKeys.push(primaryKeys);
+   }
+   console.log('allPrimaryKeys =', allPrimaryKeys);
+   allPrimaryKeys = allPrimaryKeys.map(key => `'${key}'`).join(',');
+   await QueryDatabase(`INSERT INTO metadata_primarykey (redisKey, primaryKey) VALUES ('${redisKey}', ${allPrimaryKeys})`);
    for (const table of selectedTableList) {
       var primaryKeys = primaryColSet[table];
       primaryKeys = primaryKeys.map(key => `${table}.${key}`);
       var [rows] = await QueryDatabase(`SELECT ${primaryKeys.join(',')} FROM ${query.split('FROM')[1]}`);
       rows = rows.map(obj => Object.values(obj).join(', '));
+      console.log('table', table,'rows =', rows);
       var i = 0;
       for (const row of rows) {
-         await QueryDatabase(`INSERT INTO metadata_row (redisKey, tableName, rowOrder, primaryKey) VALUES ('${redisKey}', '${table}', ${i}, '${row}')`);
+         await QueryDatabase(`INSERT INTO metadata_row (redisKey, tableName, row, roworder) VALUES ('${redisKey}', '${table}', ${row}, ${i})`);
          i++;
       }
    }
@@ -416,16 +426,24 @@ async function LogMetadata(redisKey, query, selectedTableList, selectedList) {
       await QueryDatabase(`INSERT INTO metadata_column (redisKey, tableName, columnName) VALUES ('${redisKey}', '${item.table}', '${item.column}')`);
    }
    const conditionString = query.split('FROM ')[1];
-   const regex = /\b(\w+)\.(\w+)\b/g;
-   var match;
+   const regex = /\b(\w+)\.(\w+)\b|\b(\w+)\b/g;
    const output = [];
+   let match;
    while ((match = regex.exec(conditionString)) !== null) {
-      const [, table, column] = match;
-      output.push({ table, column });
+      if (match[1] && match[2]) {
+         const [, table, column] = match;
+         output.push({ table, column });
+      } else if (match[3]) {
+         const column = match[3];
+         const matchedTable = allColList.find(item => item.column === column)?.table;
+         if (matchedTable) {
+            output.push({ table: matchedTable, column });
+         }
+      }
    }
-   const conditionList = output.filter(({ table, column }) => {
-      return allColList.some(item => item.table === table && item.column === column);
-   });
+   const conditionList = output.filter(({ table, column }) =>
+      allColList.some(item => item.table === table && item.column === column)
+   );
    console.log('conditionList =', conditionList);
    for (const item of conditionList) {
       await QueryDatabase(`INSERT INTO metadata_columncondition (redisKey, tableName, columnName) VALUES ('${redisKey}', '${item.table}', '${item.column}')`);
@@ -449,9 +467,7 @@ async function processEventQueue() {
             const event = eventQueue.shift();
             batchChangedRows.push(event.affectedRows[0].before['id']);
          }
-         console.log(batchChangedRows);
-         console.log(changedColumns);
-         //await SmartCacheReplace(batchChangedRows, changedColumns);
+         await SmartCacheReplace(batchChangedRows, changedColumns);
       }
       catch (error) {
          console.error(error);
@@ -524,7 +540,9 @@ async function SmartCacheReplace(batchChangedRows, changedColumns) {
    for (const redisKey of potentialKeysCondition) {
       const [testQuery] = await QueryDatabase(`SELECT query FROM metadata_query WHERE redisKey = '${redisKey}'`);
       const testConditions = testQuery[0].query.split('FROM ')[1];
-      //const [testResult] = await QueryDatabase(`SELECT ${primaryKeyCol} FROM ${testConditions}`);
+      var [primaryKey] = await QueryDatabase(`SELECT primaryKey FROM metadata_primarykey WHERE redisKey = '${redisKey}'`);
+      primaryKey = primaryKey[0].primaryKey;
+      const [testResult] = await QueryDatabase(`SELECT ${primaryKey} FROM ${testConditions}`);
       var rowOrderTest = '';
       var count = testResult.length;
       for (const row of testResult) {
@@ -534,8 +552,10 @@ async function SmartCacheReplace(batchChangedRows, changedColumns) {
          }
          count--;
       }
-      const [rowOrderResult] = await QueryDatabase(`SELECT rowOrder FROM metadata_roworder WHERE redisKey = '${redisKey}'`);
-      const rowOrderReal = rowOrderResult[0].rowOrder;
+      Print(`        ☆ rowOrderTest = ${rowOrderTest}`);
+      var [rowOrderReal] = await QueryDatabase(`SELECT row FROM metadata_row WHERE redisKey = '${redisKey}' ORDER BY roworder ASC`);
+      rowOrderReal = rowOrderReal.map(row => row.row).join(',');
+      Print(`        ☆ rowOrderReal = ${rowOrderReal}`);
       if (rowOrderTest != rowOrderReal) {
          affectedKeys.add(redisKey);
          Print(`        ☆ '${redisKey}' is affected based from row order testing`);
@@ -557,11 +577,7 @@ async function SmartCacheReplace(batchChangedRows, changedColumns) {
          var [query] = await QueryDatabase(`SELECT query FROM metadata_query WHERE redisKey = '${redisKey}'`);
          query = query[0].query;
          const [dbData] = await QueryDatabase(query);
-         var [genericCol] = await QueryDatabase(`SELECT columnName FROM metadata_column WHERE redisKey = '${redisKey}' AND columnType = 'generic'`);
-         var [imageCol] = await QueryDatabase(`SELECT columnName FROM metadata_column WHERE redisKey = '${redisKey}' AND columnType = 'image'`);
-         genericCol = genericCol.map(name => name.columnName);
-         imageCol = imageCol.map(name => name.columnName);
-         PrimeCache(query, redisKey, genericCol, imageCol, dbData, ttl);
+         PrimeCache(query, redisKey, dbData, ttl);
       }
       else {
          Print(`  ☆ '${redisKey}' has expired.`);
@@ -574,8 +590,8 @@ async function SmartCacheReplace(batchChangedRows, changedColumns) {
 
 process.on('SIGINT', async () => {
    await redis.bgsave();
-   Print(`⌫  Saved snapshot to dump.rdb`);
-   Print(`⌫  Exiting...`);
+   Print(`✕  Saved snapshot to dump.rdb`);
+   Print(`✕  Exiting...`);
    console.log(`---------------`);
    sqlConn.end();
    redis.quit();

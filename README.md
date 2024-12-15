@@ -4,7 +4,7 @@
 
 ## Redis installation
 1. Type in command prompt (Admin): `wsl --install` to install WSL
-2. Install with UNIX username "user" and password "user"
+2. Install with UNIX username "user" and password "passwd"
 3. Open a WSL terminal inside VS Code and type in: `sudo apt-get update` to update package information
 4. Install Redis. Type in WSL terminal: `sudo apt-get install redis`
 5. Stop Redis-server in case it has already automatically started: `sudo systemctl stop redis`
@@ -37,8 +37,7 @@
 ## Starting the app
 1. Launch MAMP to start MySQL server.
 2. Start an WSL terminal inside this project directory and type `redis-server` to start redis server.
-3. Start a generic terminal (Powershell/Command Prompt/Git bash) and get into app version of choice, for example: `cd appredis2`
-4. Make sure that app version has node_modules installed in the directory. If not, type `npm install`
+3. Make sure that app version has node_modules installed in the directory. If not, type `npm install`
 4. From the generic terminal, type `node app` to start the process in localhost with port number specified in the terminal.
 5. Open a browser and type in url "localhost:{portnumber}"
 
