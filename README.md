@@ -1,6 +1,5 @@
 ## Notice:
 - These steps are for Windows only. Might not apply to other operating systems.
-- {} are adjustable variables.
 
 ## Redis installation
 1. Type in command prompt (Admin): `wsl --install` to install WSL
@@ -22,24 +21,24 @@
 4. Launch MAMP to start MySQL server
 5. In browser go to http://localhost/phpMyAdmin/?lang=en to access phpMyAdmin interface
 6. Go to import tab
-7. Import these in order: database.sql -> images1.sql -> images2.sql. The files are in SQL folder in this project directory.
+7. Import these in order: database.sql -> images1.sql -> images2.sql. The files are in sql folder in this project directory.
 
 ## Features
-   - Redis in-memory fetching, resulting in faster response time
-   - Redis additive TTL algorithm based on query frequency
-   - Redis snapshot backup dump on process exit
-   - Redis snapshot restoration on process start
-   - Redis obsolete cache prevention system by listening to changes in database
-   - Invalid system variables prevention
-   - Our own Sharp compression level calculation algorithm using image metadata with variables tweaked using our own testing
-   - Sharp image compression, leading to smaller file sizes, resulting in faster response time and page render time
+- Redis caching
+- Redis additive time-to-live (TTL)
+- Redis snapshot backup
+- Redis snapshot restoration
+- Sharp image compression
+- Image compression level calculation algorithm
+- Smart database cache updater algorithm
 
 ## Starting the app
 1. Launch MAMP to start MySQL server.
 2. Start an WSL terminal inside this project directory and type `redis-server` to start redis server.
 3. Make sure that app version has node_modules installed in the directory. If not, type `npm install`
-4. From the generic terminal, type `node app` to start the process in localhost with port number specified in the terminal.
-5. Open a browser and type in url "localhost:{portnumber}"
+4. From a generic terminal, type `cd main_Redis+Sharp` to move into folder.
+5. From the generic terminal, type `node app` to start the process in localhost with port number specified in the terminal.
+6. Open a browser and type in url "localhost:{portnumber}". The default is "localhost:1000"
 
 ## Using the app
 - You can manually send commands to Redis by starting a new WSL terminal and type in `redis-cli`, then you can start sending commands. For example: to check all key-values, type in `keys *`

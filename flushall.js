@@ -1,5 +1,5 @@
 const MySQL2 = require('mysql2');
-const { sqlHost, sqlUser, sqlPassword, sqlDatabase } = require('./app');
+const { sqlHost, sqlUser, sqlPassword, sqlDatabase } = require('./main_Redis+Sharp/app');
 const IORedis = require("ioredis");
 
 const sqlConn = MySQL2.createConnection({

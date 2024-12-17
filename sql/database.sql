@@ -9,6 +9,8 @@ CREATE TABLE `images` (
   `image` longblob NOT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8;
 
+SELECT id, image FROM images WHERE album=1
+
 ALTER TABLE `images`
   ADD PRIMARY KEY (`id`);
 

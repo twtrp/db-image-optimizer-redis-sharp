@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html style="zoom: 0.25">
+<head>
+   <title>appredis</title>
+   <style>
+      span {
+         font-size: 150px;
+      }
+   </style>
+</head>
+<body>
+   <h1 style="font-size: 200px;">Test page</h1>
+   <p id="loadTime" style="font-size: 150px;">Total load time: </p>
+   <div id="result">
+      <script>
+         const startTime = performance.now();
+         fetch('/all')
+            .then(response => response.json())
+            .then(data => {
+               const resultDiv = document.getElementById('result');
+               const fragment = document.createDocumentFragment();
+
+               data.forEach(item => {
+                  if (item.id !== undefined) {
+                     const idElement = document.createElement('span');
+                     idElement.textContent = item.id;
+                     fragment.appendChild(idElement);
+                  }
+
+                  if (item.image?.data) {
+                     const uint8Array = new Uint8Array(item.image.data);
+                     const blob = new Blob([uint8Array], { type: 'image/webp' });
+                     const imgElement = document.createElement('img');
+                     imgElement.src = URL.createObjectURL(blob);
+                     imgElement.alt = 'Image';
+                     imgElement.loading = 'lazy';
+                     fragment.appendChild(imgElement);
+                  }
+               });
+
+               resultDiv.appendChild(fragment);
+
+               const loadTime = Math.round(performance.now() - startTime);
+               const loadTimeP = document.getElementById('loadTime');
+               loadTimeP.textContent += `${loadTime} ms`;
+
+               fetch(`/loadtime/${loadTime}`);
+            })
+            .catch(error => {
+               console.error('Error fetching image data:', error);
+            });
+      </script>
+   </div>
+</body>
+</html>
